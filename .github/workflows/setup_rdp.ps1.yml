@@ -1,0 +1,45 @@
+# High Performance RDP Setup Script
+# Specs: Ryzen 9 7900X (12 cores), 32GB DDR5, 512GB NVMe, Win11 Pro
+
+# Check system specifications
+$cpu = Get-WmiObject Win32_Processor | Select-Object Name, NumberOfCores
+$ram = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$disk = Get-WmiObject Win32_LogicalDisk | Where-Object {$_.DeviceID -eq "C:"} | Select-Object Size, FreeSpace
+
+Write-Host "=== System Specifications ==="
+Write-Host "CPU: $($cpu.Name) ($($cpu.NumberOfCores) cores)"
+Write-Host "RAM: $ram GB"
+Write-Host "Disk: $([math]::Round($disk.Size/1GB)) GB (Free: $([math]::Round($disk.FreeSpace/1GB)) GB)"
+
+# Verify minimum requirements
+if ($cpu.NumberOfCores -lt 12 -or $ram -lt 32 -or $disk.Size/1GB -lt 400) {
+    Write-Host "Error: System does not meet minimum requirements"
+    exit 1
+}
+
+# Enable Remote Desktop
+Write-Host "Enabling Remote Desktop..."
+Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
+Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+# Configure for high performance
+Write-Host "Optimizing for high performance workload..."
+powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c # High performance power plan
+Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "MaxInstanceCount" -value 4294967295
+
+# Network optimization (30 Mbps throttle)
+Write-Host "Configuring network settings..."
+netsh int tcp set global autotuninglevel=restricted
+New-NetQosPolicy -Name "RDP_Throttle" -AppPathNameMatchCondition "svchost.exe" -ThrottleRateActionBitsPerSecond 30MB
+
+# Install basic gaming components
+Write-Host "Installing gaming components..."
+choco install -y directx vcredist-all dotnetfx nvidia-geforce-experience --ignore-checksums
+
+# Final steps
+Write-Host "Adding performance monitoring..."
+schtasks /create /tn "PerfMonitor" /tr "perfmon /report" /sc daily /st 23:00
+
+Write-Host "=== RDP Setup Complete ==="
+Write-Host "IP Address: $(Get-NetIPAddress | Where-Object {$_.AddressFamily -eq 'IPv4' -and $_.PrefixOrigin -eq 'Dhcp'}).IPAddress"
+Write-Host "Recommended settings: 32-bit color, 1080p resolution, Experience: LAN (30Mbps)"
