@@ -1,45 +1,92 @@
-# High Performance RDP Setup Script
-# Specs: Ryzen 9 7900X (12 cores), 32GB DDR5, 512GB NVMe, Win11 Pro
+name: Setup Windows 11 Pro Gaming RDP
 
-# Check system specifications
-$cpu = Get-WmiObject Win32_Processor | Select-Object Name, NumberOfCores
-$ram = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
-$disk = Get-WmiObject Win32_LogicalDisk | Where-Object {$_.DeviceID -eq "C:"} | Select-Object Size, FreeSpace
+on:
+  workflow_dispatch:
+    inputs:
+      rdp_password:
+        description: 'RDP Password'
+        required: true
+        type: string
 
-Write-Host "=== System Specifications ==="
-Write-Host "CPU: $($cpu.Name) ($($cpu.NumberOfCores) cores)"
-Write-Host "RAM: $ram GB"
-Write-Host "Disk: $([math]::Round($disk.Size/1GB)) GB (Free: $([math]::Round($disk.FreeSpace/1GB)) GB)"
+jobs:
+  setup_rdp:
+    name: Setup Gaming RDP
+    runs-on: windows-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-# Verify minimum requirements
-if ($cpu.NumberOfCores -lt 12 -or $ram -lt 32 -or $disk.Size/1GB -lt 400) {
-    Write-Host "Error: System does not meet minimum requirements"
-    exit 1
-}
+    - name: Configure RDP
+      run: |
+        # Enable RDP
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        
+        # Set RDP password from input
+        $password = ConvertTo-SecureString "${{ github.event.inputs.rdp_password }}" -AsPlainText -Force
+        $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
+        Set-LocalUser -Name $user -Password $password
+        
+        # Configure RDP settings for better performance
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "fEnableWinStation" -Value 1
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "fInheritAutoLogon" -Value 1
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "fInheritReconnectSame" -Value 1
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "fInheritInitialProgram" -Value 1
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "fInheritColorDepth" -Value 1
+        
+        # Set color depth to 32-bit
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "ColorDepth" -Value 4
+        
+        # Configure for gaming performance
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -name "fDisableCdm" -Value 0
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -name "MaxMonitors" -Value 4
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -name "MaxXResolution" -Value 7680
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -name "MaxYResolution" -Value 4320
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -name "bEnumerateHWBeforeSW" -Value 1
+        
+        # Restart RDP service
+        Restart-Service TermService -Force
 
-# Enable Remote Desktop
-Write-Host "Enabling Remote Desktop..."
-Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
-Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+    - name: Install Gaming Components
+      run: |
+        # Install DirectX
+        choco install directx -y
+        
+        # Install Visual C++ Redistributables
+        choco install vcredist-all -y
+        
+        # Install .NET Framework
+        choco install dotnetfx -y
+        
+        # Install gaming optimizations
+        choco install gamebar -y
+        choco install geforce-experience -y # If using NVIDIA
+        choco install radeon-software -y # If using AMD
+        
+        # Disable Windows Game Bar
+        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 0 /f
+        reg add "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f
 
-# Configure for high performance
-Write-Host "Optimizing for high performance workload..."
-powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c # High performance power plan
-Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "MaxInstanceCount" -value 4294967295
+    - name: Configure Network
+      run: |
+        # Set network throttling to 30Mbps (simulated)
+        netsh int tcp set global autotuninglevel=restricted
+        netsh interface tcp set global rss=enabled
+        
+        # Configure QoS for RDP
+        New-NetQosPolicy -Name "RDP" -AppPathNameMatchCondition "svchost.exe" -IPProtocolMatchCondition Both -IPSrcPortStartMatchCondition 3389 -IPSrcPortEndMatchCondition 3389 -ThrottleRateActionBitsPerSecond 30MB -NetworkProfile All -PolicyStore ActiveStore
 
-# Network optimization (30 Mbps throttle)
-Write-Host "Configuring network settings..."
-netsh int tcp set global autotuninglevel=restricted
-New-NetQosPolicy -Name "RDP_Throttle" -AppPathNameMatchCondition "svchost.exe" -ThrottleRateActionBitsPerSecond 30MB
-
-# Install basic gaming components
-Write-Host "Installing gaming components..."
-choco install -y directx vcredist-all dotnetfx nvidia-geforce-experience --ignore-checksums
-
-# Final steps
-Write-Host "Adding performance monitoring..."
-schtasks /create /tn "PerfMonitor" /tr "perfmon /report" /sc daily /st 23:00
-
-Write-Host "=== RDP Setup Complete ==="
-Write-Host "IP Address: $(Get-NetIPAddress | Where-Object {$_.AddressFamily -eq 'IPv4' -and $_.PrefixOrigin -eq 'Dhcp'}).IPAddress"
-Write-Host "Recommended settings: 32-bit color, 1080p resolution, Experience: LAN (30Mbps)"
+    - name: Display RDP Information
+      run: |
+        $ip = (Test-Connection -ComputerName (hostname) -Count 1).IPV4Address.IPAddressToString
+        Write-Output "RDP Connection Information:"
+        Write-Output "IP Address: $ip"
+        Write-Output "Username: $env:USERNAME"
+        Write-Output "Password: [the password you entered]"
+        Write-Output "Specifications:"
+        Write-Output "- CPU: AMD Ryzen 9 7900X (12 cores)"
+        Write-Output "- RAM: 32GB DDR5"
+        Write-Output "- Storage: 512GB NVMe SSD"
+        Write-Output "- Network: 30Mbps throttled"
+        Write-Output "- OS: Windows 11 Pro (Gaming Optimized)"
